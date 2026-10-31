@@ -63,6 +63,15 @@ function cleanPlate(s) {
   return str.replace(/[^0-9A-Za-z\u4e00-\u9fa5]/g, '').toUpperCase();
 }
 
+function norm(s) {
+  return String(s || '')
+    .replace(/[\s\u3000]/g, '')
+    .replace(/路$/, '')
+    .replace(/专线$/, '')
+    .replace(/线$/, '')
+    .toLowerCase();
+}
+
 async function fetchLine(name) {
   const search = await post('/traffic/v2/querytrafficline', {
     keywords: name, type: 0, pageNo: 1, pageSize: 20,
@@ -73,8 +82,13 @@ async function fetchLine(name) {
     for (const li of (g.stopLineInfo || [])) cands.push(li);
     if (g.lineInfo) cands.push(g.lineInfo);
   }
-  const hit = cands.find(x => x.lineName === name);
-  if (!hit) return null;
+  if (!cands.length) return { found: false, dirs: {} };
+
+  const want = norm(name);
+  let hit = cands.find(x => String(x.lineName) === name)
+    || cands.find(x => norm(x.lineName) === want)
+    || cands.find(x => norm(x.lineName).replace(/^0+/, '') === want.replace(/^0+/, ''));
+  if (!hit) return { found: false, dirs: {} };
 
   const out = {};
   for (const dir of ['0', '1']) {
@@ -100,7 +114,7 @@ async function fetchLine(name) {
       };
     }
   }
-  return Object.keys(out).length ? out : null;
+  return { found: true, dirs: out };
 }
 
 async function pool(items, limit, worker) {
@@ -139,7 +153,7 @@ async function pool(items, limit, worker) {
     } catch (e) {}
   }
 
-  let ok = 0, empty = 0, failed = 0, added = 0;
+  let ok = 0, empty = 0, failed = 0, added = 0, matched = 0, notFound = 0;
   const t0 = Date.now();
 
   await pool(mine, CONCURRENCY, async (name) => {
@@ -150,9 +164,11 @@ async function pool(items, limit, worker) {
       failed++;
       return;
     }
-    if (!res) { empty++; return; }
+    if (!res.found) { notFound++; return; }
+    matched++;
+    if (!Object.keys(res.dirs).length) { empty++; return; }
     ok++;
-    for (const [dir, info] of Object.entries(res)) {
+    for (const [dir, info] of Object.entries(res.dirs)) {
       const key = `${name}|${dir}`;
       const cell = db.lines[key] || { f: info.f, l: info.l, r: [] };
       const seen = new Map((cell.r || []).map(r => [r[0], r[1]]));
@@ -167,6 +183,7 @@ async function pool(items, limit, worker) {
   });
 
   db.updated = new Date(Date.now() + 8 * 3600 * 1000).toISOString().replace('Z', '+08:00');
+  db.stats = { lines: mine.length, found: matched, withData: ok, empty: empty, notFound: notFound, failed: failed, added: added };
   fs.writeFileSync(OUT, JSON.stringify(db));
 
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
