@@ -8,11 +8,14 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: timetable-${{ matrix.shard }}
+  group: timetable
   cancel-in-progress: false
 
 jobs:
   fetch:
+    concurrency:
+      group: timetable-${{ matrix.shard }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
