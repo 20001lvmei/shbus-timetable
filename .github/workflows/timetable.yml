@@ -1,0 +1,39 @@
+name: timetable
+
+# 每 5 分钟抓一次上海 MaaS 的发车班次，写进 timetable.json
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: timetable
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch timetable
+        run: node scripts/fetch-timetable.js
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add timetable.json
+          if git diff --staged --quiet; then
+            echo "no change"
+          else
+            git commit -m "chore: update timetable $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push
+          fi
