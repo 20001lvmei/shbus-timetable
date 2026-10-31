@@ -154,6 +154,7 @@ async function pool(items, limit, worker) {
   }
 
   let ok = 0, empty = 0, failed = 0, added = 0, matched = 0, notFound = 0;
+  const notFoundNames = [];
   const t0 = Date.now();
 
   await pool(mine, CONCURRENCY, async (name) => {
@@ -164,7 +165,7 @@ async function pool(items, limit, worker) {
       failed++;
       return;
     }
-    if (!res.found) { notFound++; return; }
+    if (!res.found) { notFound++; notFoundNames.push(name); return; }
     matched++;
     if (!Object.keys(res.dirs).length) { empty++; return; }
     ok++;
@@ -183,6 +184,7 @@ async function pool(items, limit, worker) {
   });
 
   db.updated = new Date(Date.now() + 8 * 3600 * 1000).toISOString().replace('Z', '+08:00');
+  db.nf = notFoundNames.slice(0, 200);
   db.stats = { lines: mine.length, found: matched, withData: ok, empty: empty, notFound: notFound, failed: failed, added: added };
   fs.writeFileSync(OUT, JSON.stringify(db));
 
