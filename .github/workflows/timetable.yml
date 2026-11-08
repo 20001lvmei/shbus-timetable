@@ -21,7 +21,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     runs-on: ubuntu-latest
-    timeout-minutes: 9
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
 
@@ -29,15 +29,26 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Pull previous shard from site (FTP)
+      - name: Pull previous shard from site (FTP, 失败即中止)
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER }}
           FTP_USER: ${{ secrets.FTP_USER }}
           FTP_PASS: ${{ secrets.FTP_PASS }}
+          SHARD_INDEX: ${{ matrix.shard }}
         run: |
           SHARD=$(printf "%02d" ${{ matrix.shard }})
+          # 错开各分片的 FTP 连接，减少主机并发限制
+          sleep $(( (SHARD_INDEX - 1) * 4 ))
           mkdir -p data
-          curl --silent --show-error --ftp-create-dirs -o "data/tt-${SHARD}.json"             "ftp://${FTP_USER}:${FTP_PASS}@${FTP_SERVER}/htdocs/tt-${SHARD}.json"             || echo "no previous tt-${SHARD}.json (first run)"
+          URL="ftp://${FTP_USER}:${FTP_PASS}@${FTP_SERVER}/htdocs/tt-${SHARD}.json"
+          ok=0
+          for i in 1 2 3 4; do
+            if curl --silent --show-error --connect-timeout 15 -o "data/tt-${SHARD}.json" "$URL"; then ok=1; break; fi
+            code=$?
+            if [ "$code" = "78" ]; then echo "服务端还没有 tt-${SHARD}.json（首次运行）"; ok=1; rm -f "data/tt-${SHARD}.json"; break; fi
+            echo "第 $i 次拉取失败（curl $code），3 秒后重试"; sleep 3
+          done
+          if [ "$ok" != "1" ]; then echo "拉取旧数据失败，为避免覆盖历史，本次中止"; exit 1; fi
           ls -la data || true
 
       - name: Fetch shard ${{ matrix.shard }}
@@ -54,7 +65,12 @@ jobs:
           FTP_PASS: ${{ secrets.FTP_PASS }}
         run: |
           SHARD=$(printf "%02d" ${{ matrix.shard }})
-          curl --fail --silent --show-error --ftp-create-dirs \
-            -T "data/tt-${SHARD}.json" \
-            "ftp://${FTP_USER}:${FTP_PASS}@${FTP_SERVER}/htdocs/tt-${SHARD}.json"
-          echo "uploaded tt-${SHARD}.json"
+          for i in 1 2 3; do
+            if curl --fail --silent --show-error --connect-timeout 15 --ftp-create-dirs \
+              -T "data/tt-${SHARD}.json" \
+              "ftp://${FTP_USER}:${FTP_PASS}@${FTP_SERVER}/htdocs/tt-${SHARD}.json"; then
+              echo "uploaded tt-${SHARD}.json"; exit 0
+            fi
+            echo "第 $i 次上传失败，3 秒后重试"; sleep 3
+          done
+          echo "上传失败"; exit 1
